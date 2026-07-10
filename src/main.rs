@@ -1,12 +1,16 @@
+pub mod app;
+pub mod error;
+
 use clap::Parser;
+use tracing::Level;
 
 #[derive(Parser, Debug)]
 #[clap(author = "Zachary Cauchi", version, about)]
 /// Application configuration
 struct Args {
-    /// whether to be verbose
-    #[arg(short = 'v')]
-    verbose: bool,
+    /// Max log-level
+    #[arg(short, long, default_value_t = Level::INFO)]
+    level: Level,
 
     /// an optional name to greet
     #[arg()]
@@ -15,11 +19,12 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    if args.verbose {
-        println!("DEBUG {args:?}");
+
+    tracing_subscriber::fmt().with_max_level(args.level).init();
+
+    println!("App started.",);
+
+    if let Err(e) = app::run() {
+        tracing::error!("Error occurred during app runtime. Error: {e}");
     }
-    println!(
-        "Hello {} (from vulkan-exploration)!",
-        args.name.unwrap_or("world".to_string())
-    );
 }
