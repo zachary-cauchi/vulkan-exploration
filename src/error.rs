@@ -7,7 +7,14 @@ pub enum CrateError {
     VkLoadingErr(LoadingError),
     VkError(VulkanError),
     VkValidationError(String),
+    BadArguments(String),
     NoCompatibleDevice,
+}
+
+impl CrateError {
+    pub fn bad_arguments(msg: impl Into<String>) -> Self {
+        Self::BadArguments(msg.into())
+    }
 }
 
 impl Display for CrateError {
@@ -17,6 +24,7 @@ impl Display for CrateError {
             Self::VkError(err) => write!(f, "Vulkan error ({err})"),
             Self::VkValidationError(err) => write!(f, "Vulkan validation layer error ({err})"),
             Self::NoCompatibleDevice => f.write_str("No compatible Vulkan GPU device found"),
+            Self::BadArguments(msg) => write!(f, "Bad arguments supplied ({msg})"),
         }
     }
 }
@@ -28,6 +36,7 @@ impl Error for CrateError {
             Self::VkError(err) => Some(err),
             Self::VkValidationError(_) => None,
             Self::NoCompatibleDevice => None,
+            Self::BadArguments(_) => None,
         }
     }
 }

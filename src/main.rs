@@ -1,5 +1,6 @@
 pub mod app;
 pub mod error;
+pub mod vk;
 
 use clap::Parser;
 use tracing::Level;
