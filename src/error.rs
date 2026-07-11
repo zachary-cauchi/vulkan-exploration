@@ -7,6 +7,7 @@ pub enum CrateError {
     VkLoadingErr(LoadingError),
     VkError(VulkanError),
     VkValidationError(String),
+    NoCompatibleDevice,
 }
 
 impl Display for CrateError {
@@ -15,6 +16,7 @@ impl Display for CrateError {
             Self::VkLoadingErr(err) => write!(f, "Vulkan initialisation error ({err})"),
             Self::VkError(err) => write!(f, "Vulkan error ({err})"),
             Self::VkValidationError(err) => write!(f, "Vulkan validation layer error ({err})"),
+            Self::NoCompatibleDevice => f.write_str("No compatible Vulkan GPU device found"),
         }
     }
 }
@@ -25,6 +27,7 @@ impl Error for CrateError {
             Self::VkLoadingErr(err) => Some(err),
             Self::VkError(err) => Some(err),
             Self::VkValidationError(_) => None,
+            Self::NoCompatibleDevice => None,
         }
     }
 }
@@ -35,8 +38,17 @@ impl From<LoadingError> for CrateError {
     }
 }
 
-impl From<Validated<VulkanError>> for CrateError {
-    fn from(value: Validated<VulkanError>) -> Self {
+impl From<VulkanError> for CrateError {
+    fn from(value: VulkanError) -> Self {
+        Self::VkError(value)
+    }
+}
+
+impl<E> From<Validated<E>> for CrateError
+where
+    E: Into<CrateError> + Error + 'static,
+{
+    fn from(value: Validated<E>) -> Self {
         let mut safe_to_unwrap = false;
         let value = value.map(|e| {
             safe_to_unwrap = true;
@@ -44,8 +56,8 @@ impl From<Validated<VulkanError>> for CrateError {
         });
 
         if safe_to_unwrap {
-            // SAFETY: Already confirmed to unwrap to a value.
-            Self::VkError(value.unwrap())
+            // SAFETY: Already confirmed it will unwrap to a value.
+            value.unwrap().into()
         } else {
             // SAFETY: Implementation always returns `Some`.
             let val_err = value.source().unwrap();
