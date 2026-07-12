@@ -1,15 +1,18 @@
+pub mod device;
+
 use std::{collections::HashMap, sync::Arc};
 
-use tracing::{debug, info, instrument};
+use tracing::{debug, instrument};
 use vulkano::{
     VulkanLibrary,
-    device::{
-        Device, DeviceCreateInfo, Queue, QueueCreateInfo, QueueFlags, physical::PhysicalDevice,
-    },
+    device::{Device, DeviceCreateInfo, QueueCreateInfo, QueueFlags, physical::PhysicalDevice},
     instance::{Instance, InstanceCreateInfo},
 };
 
-use crate::error::{CrateError, CrateResult};
+use crate::{
+    error::{CrateError, CrateResult},
+    vk::device::VkDevice,
+};
 
 #[derive(Clone)]
 pub struct VkContext {
@@ -86,17 +89,8 @@ impl VkContext {
 
         debug!("Device created.");
 
-        Ok(VkDevice {
-            device,
-            queues: queues.collect(),
-        })
+        VkDevice::new(device, queues.collect())
     }
-}
-
-#[derive(Debug)]
-pub struct VkDevice {
-    device: Arc<Device>,
-    queues: Vec<Arc<Queue>>,
 }
 
 #[instrument(name = "device", skip_all, fields(name = device.properties().device_name))]

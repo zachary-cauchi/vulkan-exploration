@@ -16,5 +16,18 @@ pub fn run() -> CrateResult<()> {
 
     debug!("Device: {device:?}");
 
+    debug!("Allocating some data.");
+
+    let subbuffer = device.alloc_host_data([13, 37])?;
+
+    debug!(
+        "Allocated. Subbuffer: {:?}, contents: {:?}",
+        subbuffer,
+        *subbuffer.read()?
+    );
+
+    *subbuffer.write()? = [37, 13];
+
+    debug!("Wrote to subbuffer. New contents: {:?}", *subbuffer.read()?);
     Ok(())
 }

@@ -1,12 +1,16 @@
 use std::{error::Error, fmt::Display};
 
-use vulkano::{LoadingError, Validated, VulkanError};
+use vulkano::{
+    LoadingError, Validated, VulkanError, buffer::AllocateBufferError, sync::HostAccessError,
+};
 
 #[derive(Debug)]
 pub enum CrateError {
     VkLoadingErr(LoadingError),
     VkError(VulkanError),
     VkValidationError(String),
+    VkAlloc(AllocateBufferError),
+    VkHostAccess(HostAccessError),
     BadArguments(String),
     NoCompatibleDevice,
 }
@@ -23,6 +27,8 @@ impl Display for CrateError {
             Self::VkLoadingErr(err) => write!(f, "Vulkan initialisation error ({err})"),
             Self::VkError(err) => write!(f, "Vulkan error ({err})"),
             Self::VkValidationError(err) => write!(f, "Vulkan validation layer error ({err})"),
+            Self::VkAlloc(err) => write!(f, "Vulkan buffer allocation error ({err})"),
+            Self::VkHostAccess(err) => write!(f, "Vulkan host memory access error ({err})"),
             Self::NoCompatibleDevice => f.write_str("No compatible Vulkan GPU device found"),
             Self::BadArguments(msg) => write!(f, "Bad arguments supplied ({msg})"),
         }
@@ -34,6 +40,8 @@ impl Error for CrateError {
         match self {
             Self::VkLoadingErr(err) => Some(err),
             Self::VkError(err) => Some(err),
+            Self::VkAlloc(err) => Some(err),
+            Self::VkHostAccess(err) => Some(err),
             Self::VkValidationError(_) => None,
             Self::NoCompatibleDevice => None,
             Self::BadArguments(_) => None,
@@ -50,6 +58,18 @@ impl From<LoadingError> for CrateError {
 impl From<VulkanError> for CrateError {
     fn from(value: VulkanError) -> Self {
         Self::VkError(value)
+    }
+}
+
+impl From<AllocateBufferError> for CrateError {
+    fn from(value: AllocateBufferError) -> Self {
+        Self::VkAlloc(value)
+    }
+}
+
+impl From<HostAccessError> for CrateError {
+    fn from(value: HostAccessError) -> Self {
+        Self::VkHostAccess(value)
     }
 }
 
