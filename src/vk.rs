@@ -89,7 +89,7 @@ impl VkContext {
 
         debug!("Device created.");
 
-        VkDevice::new(device, queues.collect())
+        VkDevice::new(device, queue_family_index as u32, queues.collect())
     }
 }
 

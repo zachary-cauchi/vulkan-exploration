@@ -1,7 +1,11 @@
 use tracing::{debug, info};
-use vulkano::device::QueueFlags;
+use vulkano::{device::QueueFlags, memory::allocator::MemoryTypeFilter};
 
-use crate::{error::CrateResult, vk::VkContext};
+use crate::{
+    error::CrateResult,
+    examples::{example_allocate_memory_buffer, example_copy_between_buffers},
+    vk::VkContext,
+};
 
 pub fn run() -> CrateResult<()> {
     let vk_context = VkContext::new()?;
@@ -16,18 +20,9 @@ pub fn run() -> CrateResult<()> {
 
     debug!("Device: {device:?}");
 
-    debug!("Allocating some data.");
+    example_allocate_memory_buffer(device.clone())?;
 
-    let subbuffer = device.alloc_host_data([13, 37])?;
+    example_copy_between_buffers(device)?;
 
-    debug!(
-        "Allocated. Subbuffer: {:?}, contents: {:?}",
-        subbuffer,
-        *subbuffer.read()?
-    );
-
-    *subbuffer.write()? = [37, 13];
-
-    debug!("Wrote to subbuffer. New contents: {:?}", *subbuffer.read()?);
     Ok(())
 }

@@ -1,16 +1,18 @@
 use std::{error::Error, fmt::Display};
 
 use vulkano::{
-    LoadingError, Validated, VulkanError, buffer::AllocateBufferError, sync::HostAccessError,
+    LoadingError, Validated, ValidationError, VulkanError, buffer::AllocateBufferError,
+    command_buffer::CommandBufferExecError, sync::HostAccessError,
 };
 
 #[derive(Debug)]
 pub enum CrateError {
     VkLoadingErr(LoadingError),
     VkError(VulkanError),
-    VkValidationError(String),
+    VkValidationError(ValidationError),
     VkAlloc(AllocateBufferError),
     VkHostAccess(HostAccessError),
+    VkCmdBufferExec(CommandBufferExecError),
     BadArguments(String),
     NoCompatibleDevice,
 }
@@ -29,6 +31,7 @@ impl Display for CrateError {
             Self::VkValidationError(err) => write!(f, "Vulkan validation layer error ({err})"),
             Self::VkAlloc(err) => write!(f, "Vulkan buffer allocation error ({err})"),
             Self::VkHostAccess(err) => write!(f, "Vulkan host memory access error ({err})"),
+            Self::VkCmdBufferExec(err) => write!(f, "Vulkan command buffer exec error ({err})"),
             Self::NoCompatibleDevice => f.write_str("No compatible Vulkan GPU device found"),
             Self::BadArguments(msg) => write!(f, "Bad arguments supplied ({msg})"),
         }
@@ -42,7 +45,8 @@ impl Error for CrateError {
             Self::VkError(err) => Some(err),
             Self::VkAlloc(err) => Some(err),
             Self::VkHostAccess(err) => Some(err),
-            Self::VkValidationError(_) => None,
+            Self::VkValidationError(err) => Some(err),
+            Self::VkCmdBufferExec(err) => Some(err),
             Self::NoCompatibleDevice => None,
             Self::BadArguments(_) => None,
         }
@@ -73,6 +77,18 @@ impl From<HostAccessError> for CrateError {
     }
 }
 
+impl From<ValidationError> for CrateError {
+    fn from(value: ValidationError) -> Self {
+        Self::VkValidationError(value)
+    }
+}
+
+impl From<CommandBufferExecError> for CrateError {
+    fn from(value: CommandBufferExecError) -> Self {
+        Self::VkCmdBufferExec(value)
+    }
+}
+
 impl<E> From<Validated<E>> for CrateError
 where
     E: Into<CrateError> + Error + 'static,
@@ -89,9 +105,22 @@ where
             value.unwrap().into()
         } else {
             // SAFETY: Implementation always returns `Some`.
-            let val_err = value.source().unwrap();
-            Self::VkValidationError(format!("{val_err:?}"))
+            let dyn_err = value.source().unwrap();
+
+            // SAFETY: In the `else` branch, the type can only be a `ValidationError`.
+            let val_err = dyn_err.downcast_ref::<Box<ValidationError>>().unwrap();
+
+            val_err.as_ref().clone().into()
         }
+    }
+}
+
+impl<E> From<Box<E>> for CrateError
+where
+    E: Clone + Into<CrateError>,
+{
+    fn from(value: Box<E>) -> Self {
+        value.as_ref().clone().into()
     }
 }
 
