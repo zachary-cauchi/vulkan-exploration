@@ -6,6 +6,10 @@ use vulkano::{
         AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer,
         allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo},
     },
+    descriptor_set::{
+        CopyDescriptorSet, DescriptorSet, WriteDescriptorSet,
+        allocator::StandardDescriptorSetAllocator, layout::DescriptorSetLayout,
+    },
     device::{Device, Queue},
     memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
     sync::{self, GpuFuture},
@@ -20,6 +24,7 @@ pub struct VkDevice {
     queues: Vec<Arc<Queue>>,
     mem_allocator: Arc<StandardMemoryAllocator>,
     cmd_allocator: Arc<StandardCommandBufferAllocator>,
+    desc_allocator: Arc<StandardDescriptorSetAllocator>,
 }
 
 impl VkDevice {
@@ -33,6 +38,10 @@ impl VkDevice {
             device.clone(),
             StandardCommandBufferAllocatorCreateInfo::default(),
         ));
+        let desc_allocator = Arc::new(StandardDescriptorSetAllocator::new(
+            device.clone(),
+            Default::default(),
+        ));
 
         Ok(Self {
             device,
@@ -40,6 +49,7 @@ impl VkDevice {
             queue_family_index,
             mem_allocator,
             cmd_allocator,
+            desc_allocator,
         })
     }
 
@@ -126,6 +136,22 @@ impl VkDevice {
         future.wait(None)?;
 
         Ok(())
+    }
+
+    pub fn descriptor_set(
+        &self,
+        layout: Arc<DescriptorSetLayout>,
+        descriptor_writes: impl IntoIterator<Item = WriteDescriptorSet>,
+        descriptor_copies: impl IntoIterator<Item = CopyDescriptorSet>,
+    ) -> CrateResult<Arc<DescriptorSet>> {
+        let descriptor_set = DescriptorSet::new(
+            self.desc_allocator.clone(),
+            layout,
+            descriptor_writes,
+            descriptor_copies,
+        )?;
+
+        Ok(descriptor_set)
     }
 
     pub fn device(&self) -> Arc<Device> {

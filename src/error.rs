@@ -16,12 +16,17 @@ pub enum CrateError {
     VkCmdBufferExec(CommandBufferExecError),
     VkPipelineInfo(IntoPipelineLayoutCreateInfoError),
     BadArguments(String),
+    MissingData(String),
     NoCompatibleDevice,
 }
 
 impl CrateError {
     pub fn bad_arguments(msg: impl Into<String>) -> Self {
         Self::BadArguments(msg.into())
+    }
+
+    pub fn missing_data(msg: impl Into<String>) -> Self {
+        Self::MissingData(msg.into())
     }
 }
 
@@ -37,6 +42,7 @@ impl Display for CrateError {
             Self::VkPipelineInfo(err) => write!(f, "Vulkan pipeline layout creation error ({err})"),
             Self::NoCompatibleDevice => f.write_str("No compatible Vulkan GPU device found"),
             Self::BadArguments(msg) => write!(f, "Bad arguments supplied ({msg})"),
+            Self::MissingData(msg) => write!(f, "Missing expected data ({msg})"),
         }
     }
 }
@@ -52,6 +58,7 @@ impl Error for CrateError {
             Self::VkCmdBufferExec(err) => Some(err),
             Self::VkPipelineInfo(err) => Some(err),
             Self::NoCompatibleDevice => None,
+            Self::MissingData(_) => None,
             Self::BadArguments(_) => None,
         }
     }
