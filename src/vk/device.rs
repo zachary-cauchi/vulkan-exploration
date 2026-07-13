@@ -72,6 +72,35 @@ impl VkDevice {
         Ok(subbuffer)
     }
 
+    /// Demo function to allocate some data from an iterator of finite, known size.
+    /// Creates an on-device, host-accessible subbuffer for accessing the data.
+    pub fn alloc_host_iter<D, I>(
+        &self,
+        buffer_type: BufferUsage,
+        mem_type: MemoryTypeFilter,
+        data_iter: I,
+    ) -> CrateResult<Subbuffer<[D]>>
+    where
+        D: BufferContents,
+        I: IntoIterator<Item = D>,
+        I::IntoIter: ExactSizeIterator,
+    {
+        let buffer = Buffer::from_iter(
+            self.mem_allocator.clone(),
+            BufferCreateInfo {
+                usage: buffer_type,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: mem_type,
+                ..Default::default()
+            },
+            data_iter,
+        )?;
+
+        Ok(buffer)
+    }
+
     pub fn primary_cmd_buffer(
         &self,
         usage: CommandBufferUsage,
@@ -97,5 +126,9 @@ impl VkDevice {
         future.wait(None)?;
 
         Ok(())
+    }
+
+    pub fn device(&self) -> Arc<Device> {
+        self.device.clone()
     }
 }

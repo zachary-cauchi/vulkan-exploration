@@ -1,9 +1,17 @@
+pub mod shaders;
+
+use std::sync::Arc;
+
 use tracing::debug;
 use vulkano::{
     buffer::BufferUsage,
     command_buffer::{CommandBufferUsage, CopyBufferInfo},
     memory::allocator::MemoryTypeFilter,
-    sync,
+    pipeline::{
+        ComputePipeline, PipelineLayout, PipelineShaderStageCreateInfo,
+        compute::ComputePipelineCreateInfo, layout::PipelineDescriptorSetLayoutCreateInfo,
+    },
+    shader::ShaderModule,
 };
 
 use crate::{error::CrateResult, vk::device::VkDevice};
@@ -68,6 +76,53 @@ pub fn example_copy_between_buffers(device: VkDevice) -> CrateResult<()> {
     debug!(
         "Buffer contents after operation - Source: {new_src_content:?}, Dest: {new_dst_content:?}"
     );
+
+    Ok(())
+}
+
+pub fn example_perform_compute(device: VkDevice) -> CrateResult<()> {
+    debug!("Compute shader example entered.");
+
+    let data_list = 0..65536u32;
+
+    debug!("Allocating buffer from iter.");
+
+    let data_buffer = device.alloc_host_iter(
+        BufferUsage::STORAGE_BUFFER,
+        MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+        data_list,
+    )?;
+
+    debug!("Loading shader onto device.");
+
+    let shader: Arc<ShaderModule> = shaders::mul_by_12::load(device.device())?;
+
+    debug!("Loading shader entrypoint.");
+
+    // SAFETY: This will always be Some because the shader has the `main` entrypoint at compile-time.
+    let entry = shader.entry_point("main").unwrap();
+
+    debug!("Entrypoint set. Creating pipeline stage.");
+
+    let stage = PipelineShaderStageCreateInfo::new(entry);
+
+    debug!("Created stage.");
+
+    let layout = PipelineLayout::new(
+        device.device(),
+        PipelineDescriptorSetLayoutCreateInfo::from_stages([&stage])
+            .into_pipeline_layout_create_info(device.device())?,
+    )?;
+
+    debug!("Layout created.");
+
+    let compute_pipeline = ComputePipeline::new(
+        device.device(),
+        None,
+        ComputePipelineCreateInfo::stage_layout(stage, layout),
+    )?;
+
+    debug!("Compute pipeline ready. Pipeline: {compute_pipeline:?}");
 
     Ok(())
 }

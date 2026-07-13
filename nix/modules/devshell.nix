@@ -44,6 +44,9 @@
 
         LD_LIBRARY_PATH = lib.makeLibraryPath buildInputs;
         VK_LAYER_PATH = "${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d";
+        # `shaderc_sys` does not detect NixOS paths properly. This is a workaround.
+        # See https://github.com/google/shaderc-rs/issues/107#issuecomment-2592482347
+        SHADERC_LIB_DIR = lib.makeLibraryPath [ pkgs.shaderc ];
       };
     };
 }

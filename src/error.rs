@@ -2,7 +2,8 @@ use std::{error::Error, fmt::Display};
 
 use vulkano::{
     LoadingError, Validated, ValidationError, VulkanError, buffer::AllocateBufferError,
-    command_buffer::CommandBufferExecError, sync::HostAccessError,
+    command_buffer::CommandBufferExecError, pipeline::layout::IntoPipelineLayoutCreateInfoError,
+    sync::HostAccessError,
 };
 
 #[derive(Debug)]
@@ -13,6 +14,7 @@ pub enum CrateError {
     VkAlloc(AllocateBufferError),
     VkHostAccess(HostAccessError),
     VkCmdBufferExec(CommandBufferExecError),
+    VkPipelineInfo(IntoPipelineLayoutCreateInfoError),
     BadArguments(String),
     NoCompatibleDevice,
 }
@@ -32,6 +34,7 @@ impl Display for CrateError {
             Self::VkAlloc(err) => write!(f, "Vulkan buffer allocation error ({err})"),
             Self::VkHostAccess(err) => write!(f, "Vulkan host memory access error ({err})"),
             Self::VkCmdBufferExec(err) => write!(f, "Vulkan command buffer exec error ({err})"),
+            Self::VkPipelineInfo(err) => write!(f, "Vulkan pipeline layout creation error ({err})"),
             Self::NoCompatibleDevice => f.write_str("No compatible Vulkan GPU device found"),
             Self::BadArguments(msg) => write!(f, "Bad arguments supplied ({msg})"),
         }
@@ -47,6 +50,7 @@ impl Error for CrateError {
             Self::VkHostAccess(err) => Some(err),
             Self::VkValidationError(err) => Some(err),
             Self::VkCmdBufferExec(err) => Some(err),
+            Self::VkPipelineInfo(err) => Some(err),
             Self::NoCompatibleDevice => None,
             Self::BadArguments(_) => None,
         }
@@ -86,6 +90,12 @@ impl From<ValidationError> for CrateError {
 impl From<CommandBufferExecError> for CrateError {
     fn from(value: CommandBufferExecError) -> Self {
         Self::VkCmdBufferExec(value)
+    }
+}
+
+impl From<IntoPipelineLayoutCreateInfoError> for CrateError {
+    fn from(value: IntoPipelineLayoutCreateInfoError) -> Self {
+        Self::VkPipelineInfo(value)
     }
 }
 

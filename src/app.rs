@@ -1,9 +1,11 @@
 use tracing::{debug, info};
-use vulkano::{device::QueueFlags, memory::allocator::MemoryTypeFilter};
+use vulkano::device::QueueFlags;
 
 use crate::{
     error::CrateResult,
-    examples::{example_allocate_memory_buffer, example_copy_between_buffers},
+    examples::{
+        example_allocate_memory_buffer, example_copy_between_buffers, example_perform_compute,
+    },
     vk::VkContext,
 };
 
@@ -22,7 +24,9 @@ pub fn run() -> CrateResult<()> {
 
     example_allocate_memory_buffer(device.clone())?;
 
-    example_copy_between_buffers(device)?;
+    example_copy_between_buffers(device.clone())?;
+
+    example_perform_compute(device)?;
 
     Ok(())
 }
