@@ -2,11 +2,16 @@ pub mod shaders;
 
 use std::sync::Arc;
 
+use image::Rgba;
 use tracing::{debug, warn};
 use vulkano::{
     buffer::BufferUsage,
-    command_buffer::{CommandBufferUsage, CopyBufferInfo},
+    command_buffer::{
+        ClearColorImageInfo, CommandBufferUsage, CopyBufferInfo, CopyImageToBufferInfo,
+    },
     descriptor_set::WriteDescriptorSet,
+    format::{ClearColorValue, Format},
+    image::{ImageCreateInfo, ImageType, ImageUsage},
     memory::allocator::MemoryTypeFilter,
     pipeline::{
         ComputePipeline, Pipeline, PipelineBindPoint, PipelineLayout,
@@ -181,6 +186,57 @@ pub fn example_perform_compute(device: VkDevice) -> CrateResult<()> {
         true => debug!("Shader computed all values correctly!"),
         false => warn!("Shader did not compute all values correctly."),
     }
+
+    Ok(())
+}
+
+pub fn example_image(device: VkDevice) -> CrateResult<()> {
+    const DIM_X: u32 = 1024;
+    const DIM_Y: u32 = 1024;
+    const DIM_Z: u32 = 1;
+    const BUFFER_SIZE: u32 = DIM_X * DIM_Y * DIM_Z * 4;
+
+    let dimensions: [u32; 3] = [DIM_X, DIM_Y, DIM_Z];
+
+    let src_image = device.new_image(
+        ImageCreateInfo {
+            image_type: ImageType::Dim2d,
+            format: Format::R8G8B8A8_UNORM,
+            extent: dimensions,
+            usage: ImageUsage::TRANSFER_DST | ImageUsage::TRANSFER_SRC,
+            ..Default::default()
+        },
+        MemoryTypeFilter::PREFER_DEVICE,
+    )?;
+
+    let buffer_iter = (0..BUFFER_SIZE).map(|_| 0u8);
+    let img_dest_buffer = device.alloc_host_iter(
+        BufferUsage::TRANSFER_DST,
+        MemoryTypeFilter::PREFER_HOST | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+        buffer_iter,
+    )?;
+
+    let mut builder = device.primary_cmd_buffer(CommandBufferUsage::OneTimeSubmit)?;
+
+    builder
+        .clear_color_image(ClearColorImageInfo {
+            clear_value: ClearColorValue::Float([1.0, 0.0, 1.0, 1.0]),
+            ..ClearColorImageInfo::image(src_image.clone())
+        })?
+        .copy_image_to_buffer(CopyImageToBufferInfo::image_buffer(
+            src_image.clone(),
+            img_dest_buffer.clone(),
+        ))?;
+
+    let cmd_buffer = builder.build()?;
+
+    device.send_to_device(cmd_buffer)?;
+
+    let buffer_content = img_dest_buffer.read()?;
+    let final_image = image::ImageBuffer::<Rgba<u8>, _>::from_raw(1024, 1024, &buffer_content[..])
+        .ok_or_else(|| CrateError::bad_arguments("Failed to parse raw image."))?;
+
+    final_image.save("out/image.png")?;
 
     Ok(())
 }

@@ -11,6 +11,7 @@ use vulkano::{
         allocator::StandardDescriptorSetAllocator, layout::DescriptorSetLayout,
     },
     device::{Device, Queue},
+    image::{Image, ImageCreateInfo},
     memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
     sync::{self, GpuFuture},
 };
@@ -152,6 +153,23 @@ impl VkDevice {
         )?;
 
         Ok(descriptor_set)
+    }
+
+    pub fn new_image(
+        &self,
+        create_info: ImageCreateInfo,
+        mem_type: MemoryTypeFilter,
+    ) -> CrateResult<Arc<Image>> {
+        let image = Image::new(
+            self.mem_allocator.clone(),
+            create_info,
+            AllocationCreateInfo {
+                memory_type_filter: mem_type,
+                ..Default::default()
+            },
+        )?;
+
+        Ok(image)
     }
 
     pub fn device(&self) -> Arc<Device> {

@@ -1,9 +1,10 @@
 use std::{error::Error, fmt::Display};
 
+use image::ImageError;
 use vulkano::{
     LoadingError, Validated, ValidationError, VulkanError, buffer::AllocateBufferError,
-    command_buffer::CommandBufferExecError, pipeline::layout::IntoPipelineLayoutCreateInfoError,
-    sync::HostAccessError,
+    command_buffer::CommandBufferExecError, image::AllocateImageError,
+    pipeline::layout::IntoPipelineLayoutCreateInfoError, sync::HostAccessError,
 };
 
 #[derive(Debug)]
@@ -15,6 +16,8 @@ pub enum CrateError {
     VkHostAccess(HostAccessError),
     VkCmdBufferExec(CommandBufferExecError),
     VkPipelineInfo(IntoPipelineLayoutCreateInfoError),
+    VkImage(AllocateImageError),
+    ImageProcessing(ImageError),
     BadArguments(String),
     MissingData(String),
     NoCompatibleDevice,
@@ -40,9 +43,11 @@ impl Display for CrateError {
             Self::VkHostAccess(err) => write!(f, "Vulkan host memory access error ({err})"),
             Self::VkCmdBufferExec(err) => write!(f, "Vulkan command buffer exec error ({err})"),
             Self::VkPipelineInfo(err) => write!(f, "Vulkan pipeline layout creation error ({err})"),
-            Self::NoCompatibleDevice => f.write_str("No compatible Vulkan GPU device found"),
+            Self::VkImage(err) => write!(f, "Vulkan image allocation error ({err})"),
+            Self::ImageProcessing(err) => write!(f, "Error in image-handling library ({err})"),
             Self::BadArguments(msg) => write!(f, "Bad arguments supplied ({msg})"),
             Self::MissingData(msg) => write!(f, "Missing expected data ({msg})"),
+            Self::NoCompatibleDevice => f.write_str("No compatible Vulkan GPU device found"),
         }
     }
 }
@@ -57,9 +62,9 @@ impl Error for CrateError {
             Self::VkValidationError(err) => Some(err),
             Self::VkCmdBufferExec(err) => Some(err),
             Self::VkPipelineInfo(err) => Some(err),
-            Self::NoCompatibleDevice => None,
-            Self::MissingData(_) => None,
-            Self::BadArguments(_) => None,
+            Self::VkImage(err) => Some(err),
+            Self::ImageProcessing(err) => Some(err),
+            Self::BadArguments(_) | Self::MissingData(_) | Self::NoCompatibleDevice => None,
         }
     }
 }
@@ -106,28 +111,20 @@ impl From<IntoPipelineLayoutCreateInfoError> for CrateError {
     }
 }
 
+impl From<AllocateImageError> for CrateError {
+    fn from(value: AllocateImageError) -> Self {
+        Self::VkImage(value)
+    }
+}
+
 impl<E> From<Validated<E>> for CrateError
 where
     E: Into<CrateError> + Error + 'static,
 {
     fn from(value: Validated<E>) -> Self {
-        let mut safe_to_unwrap = false;
-        let value = value.map(|e| {
-            safe_to_unwrap = true;
-            e
-        });
-
-        if safe_to_unwrap {
-            // SAFETY: Already confirmed it will unwrap to a value.
-            value.unwrap().into()
-        } else {
-            // SAFETY: Implementation always returns `Some`.
-            let dyn_err = value.source().unwrap();
-
-            // SAFETY: In the `else` branch, the type can only be a `ValidationError`.
-            let val_err = dyn_err.downcast_ref::<Box<ValidationError>>().unwrap();
-
-            val_err.as_ref().clone().into()
+        match value {
+            Validated::Error(e) => e.into(),
+            Validated::ValidationError(e) => e.into(),
         }
     }
 }
@@ -138,6 +135,12 @@ where
 {
     fn from(value: Box<E>) -> Self {
         value.as_ref().clone().into()
+    }
+}
+
+impl From<ImageError> for CrateError {
+    fn from(value: ImageError) -> Self {
+        Self::ImageProcessing(value)
     }
 }
 
