@@ -195,8 +195,11 @@ pub fn example_image(device: VkDevice) -> CrateResult<()> {
     const DIM_Y: u32 = 1024;
     const DIM_Z: u32 = 1;
     const BUFFER_SIZE: u32 = DIM_X * DIM_Y * DIM_Z * 4;
+    const IMG_SAVE_PATH: &str = "out/image.png";
 
     let dimensions: [u32; 3] = [DIM_X, DIM_Y, DIM_Z];
+
+    debug!("Creating source image.");
 
     let src_image = device.new_image(
         ImageCreateInfo {
@@ -209,12 +212,16 @@ pub fn example_image(device: VkDevice) -> CrateResult<()> {
         MemoryTypeFilter::PREFER_DEVICE,
     )?;
 
+    debug!("Done. Creating destination buffer for image exporting.");
+
     let buffer_iter = (0..BUFFER_SIZE).map(|_| 0u8);
     let img_dest_buffer = device.alloc_host_iter(
         BufferUsage::TRANSFER_DST,
         MemoryTypeFilter::PREFER_HOST | MemoryTypeFilter::HOST_RANDOM_ACCESS,
         buffer_iter,
     )?;
+
+    debug!("Creating command buffer to clear image then copy to destination buffer.");
 
     let mut builder = device.primary_cmd_buffer(CommandBufferUsage::OneTimeSubmit)?;
 
@@ -230,13 +237,19 @@ pub fn example_image(device: VkDevice) -> CrateResult<()> {
 
     let cmd_buffer = builder.build()?;
 
+    debug!("Sending command buffer to physical device.");
+
     device.send_to_device(cmd_buffer)?;
+
+    debug!("Commands executed. Retrieving image.");
 
     let buffer_content = img_dest_buffer.read()?;
     let final_image = image::ImageBuffer::<Rgba<u8>, _>::from_raw(1024, 1024, &buffer_content[..])
         .ok_or_else(|| CrateError::bad_arguments("Failed to parse raw image."))?;
 
-    final_image.save("out/image.png")?;
+    debug!("Image parsed successfully. Saving to '{IMG_SAVE_PATH}'.");
+
+    final_image.save(IMG_SAVE_PATH)?;
 
     Ok(())
 }
