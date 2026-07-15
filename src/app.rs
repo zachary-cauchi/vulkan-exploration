@@ -5,7 +5,7 @@ use crate::{
     error::CrateResult,
     examples::{
         example_allocate_memory_buffer, example_copy_between_buffers, example_image,
-        example_perform_compute,
+        example_mandelbrot_compute, example_perform_compute,
     },
     vk::VkContext,
 };
@@ -29,7 +29,9 @@ pub fn run() -> CrateResult<()> {
 
     example_perform_compute(device.clone())?;
 
-    example_image(device)?;
+    example_image(device.clone())?;
+
+    example_mandelbrot_compute(device)?;
 
     Ok(())
 }

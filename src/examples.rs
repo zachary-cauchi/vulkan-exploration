@@ -11,7 +11,7 @@ use vulkano::{
     },
     descriptor_set::WriteDescriptorSet,
     format::{ClearColorValue, Format},
-    image::{ImageCreateInfo, ImageType, ImageUsage},
+    image::{ImageCreateInfo, ImageType, ImageUsage, view::ImageView},
     memory::allocator::MemoryTypeFilter,
     pipeline::{
         ComputePipeline, Pipeline, PipelineBindPoint, PipelineLayout,
@@ -118,11 +118,7 @@ pub fn example_perform_compute(device: VkDevice) -> CrateResult<()> {
 
     debug!("Created stage.");
 
-    let layout = PipelineLayout::new(
-        device.device(),
-        PipelineDescriptorSetLayoutCreateInfo::from_stages([&stage])
-            .into_pipeline_layout_create_info(device.device())?,
-    )?;
+    let layout = device.auto_pipeline_layout([&stage])?;
 
     debug!("Layout created.");
 
@@ -248,6 +244,108 @@ pub fn example_image(device: VkDevice) -> CrateResult<()> {
         .ok_or_else(|| CrateError::bad_arguments("Failed to parse raw image."))?;
 
     debug!("Image parsed successfully. Saving to '{IMG_SAVE_PATH}'.");
+
+    final_image.save(IMG_SAVE_PATH)?;
+
+    Ok(())
+}
+
+pub fn example_mandelbrot_compute(device: VkDevice) -> CrateResult<()> {
+    const DIM_X: u32 = 1024;
+    const DIM_Y: u32 = 1024;
+    const DIM_Z: u32 = 1;
+    const BUFFER_SIZE: u32 = DIM_X * DIM_Y * DIM_Z * 4;
+    const IMG_SAVE_PATH: &str = "out/mandelbrot.png";
+
+    debug!("Creating image and image view.");
+
+    let dimensions = [DIM_X, DIM_Y, DIM_Z];
+    let image = device.new_image(
+        ImageCreateInfo {
+            image_type: ImageType::Dim2d,
+            format: Format::R8G8B8A8_UNORM,
+            extent: dimensions,
+            usage: ImageUsage::STORAGE | ImageUsage::TRANSFER_SRC,
+            ..Default::default()
+        },
+        MemoryTypeFilter::PREFER_DEVICE,
+    )?;
+
+    let view = ImageView::new_default(image.clone())?;
+
+    debug!("Creating destination buffer.");
+
+    let buffer_iter = (0..BUFFER_SIZE).map(|_| 0u8);
+    let img_dest_buffer = device.alloc_host_iter(
+        BufferUsage::TRANSFER_DST,
+        MemoryTypeFilter::PREFER_HOST | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+        buffer_iter,
+    )?;
+
+    debug!("Loading and setting up mandelbrot shader.");
+
+    let shader: Arc<ShaderModule> = shaders::mandelbrot::load(device.device())?;
+    // SAFETY: This will always be Some because the shader has the `main` entrypoint at compile-time.
+    let entry = shader.entry_point("main").unwrap();
+    let stage = PipelineShaderStageCreateInfo::new(entry);
+    let layout = device.auto_pipeline_layout([&stage])?;
+
+    let compute_pipeline = ComputePipeline::new(
+        device.device(),
+        None,
+        ComputePipelineCreateInfo::stage_layout(stage, layout),
+    )?;
+
+    debug!("Compute pipeline initialised.");
+
+    let descriptor_set_layouts = compute_pipeline.layout().set_layouts();
+    // Our compute pipeline only has the one compute shader stage in its layout, so get the descriptor set for that stage.
+    let descriptor_set_layout_index = 0;
+    let descriptor_set_layout = descriptor_set_layouts
+        .get(descriptor_set_layout_index)
+        .ok_or_else(|| CrateError::missing_data("Empty descriptor set."))?;
+
+    // Bind the data_buffer to binding 0.
+    let data_buffer_binding = WriteDescriptorSet::image_view(0, view.clone());
+
+    let descriptor_set =
+        device.descriptor_set(descriptor_set_layout.clone(), [data_buffer_binding], [])?;
+
+    debug!("Descriptor set initialised. Building command buffer.");
+
+    let work_group_counts = [DIM_X / 8, DIM_Y / 8, 1];
+    let mut cmd_buffer_builder = device.primary_cmd_buffer(CommandBufferUsage::OneTimeSubmit)?;
+
+    cmd_buffer_builder
+        .bind_pipeline_compute(compute_pipeline.clone())?
+        .bind_descriptor_sets(
+            PipelineBindPoint::Compute,
+            compute_pipeline.layout().clone(),
+            descriptor_set_layout_index as u32,
+            descriptor_set,
+        )?;
+
+    // SAFETY: There is no 'safe' way to dispatch programs outside the host to the physical device.
+    // As such, we have to trust we did everything right to have some confidence in its safety.
+    unsafe {
+        cmd_buffer_builder.dispatch(work_group_counts)?;
+    }
+
+    cmd_buffer_builder.copy_image_to_buffer(CopyImageToBufferInfo::image_buffer(
+        image.clone(),
+        img_dest_buffer.clone(),
+    ))?;
+
+    let cmd_buffer = cmd_buffer_builder.build()?;
+
+    device.send_to_device(cmd_buffer)?;
+
+    let buffer_content = img_dest_buffer.read()?;
+    let final_image =
+        image::ImageBuffer::<Rgba<u8>, _>::from_raw(DIM_X, DIM_Y, &buffer_content[..])
+            .ok_or_else(|| CrateError::bad_arguments("Failed to parse raw image."))?;
+
+    debug!("Image parsed successfully. Saving to {IMG_SAVE_PATH}.");
 
     final_image.save(IMG_SAVE_PATH)?;
 

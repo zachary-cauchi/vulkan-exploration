@@ -13,6 +13,10 @@ use vulkano::{
     device::{Device, Queue},
     image::{Image, ImageCreateInfo},
     memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
+    pipeline::{
+        PipelineLayout, PipelineShaderStageCreateInfo,
+        layout::PipelineDescriptorSetLayoutCreateInfo,
+    },
     sync::{self, GpuFuture},
 };
 
@@ -170,6 +174,19 @@ impl VkDevice {
         )?;
 
         Ok(image)
+    }
+
+    pub fn auto_pipeline_layout<'a>(
+        &self,
+        stages: impl IntoIterator<Item = &'a PipelineShaderStageCreateInfo>,
+    ) -> CrateResult<Arc<PipelineLayout>> {
+        let layout = PipelineLayout::new(
+            self.device.clone(),
+            PipelineDescriptorSetLayoutCreateInfo::from_stages(stages)
+                .into_pipeline_layout_create_info(self.device.clone())?,
+        )?;
+
+        Ok(layout)
     }
 
     pub fn device(&self) -> Arc<Device> {
