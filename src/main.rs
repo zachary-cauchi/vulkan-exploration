@@ -1,6 +1,7 @@
 pub mod app;
 pub mod error;
 pub(crate) mod examples;
+pub mod shape;
 pub mod vk;
 
 use clap::Parser;

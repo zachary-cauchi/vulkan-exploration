@@ -4,8 +4,8 @@ use vulkano::device::QueueFlags;
 use crate::{
     error::CrateResult,
     examples::{
-        example_allocate_memory_buffer, example_copy_between_buffers, example_image,
-        example_mandelbrot_compute, example_perform_compute,
+        example_allocate_memory_buffer, example_copy_between_buffers, example_graphics_pipeline,
+        example_image, example_mandelbrot_compute, example_perform_compute,
     },
     vk::VkContext,
 };
@@ -31,7 +31,9 @@ pub fn run() -> CrateResult<()> {
 
     example_image(device.clone())?;
 
-    example_mandelbrot_compute(device)?;
+    example_mandelbrot_compute(device.clone())?;
+
+    example_graphics_pipeline(device)?;
 
     Ok(())
 }
