@@ -11,22 +11,26 @@ use vulkano::{
         allocator::StandardDescriptorSetAllocator, layout::DescriptorSetLayout,
     },
     device::{Device, Queue},
-    image::{Image, ImageCreateInfo},
+    image::{Image, ImageCreateInfo, ImageUsage},
     memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
     pipeline::{
         PipelineLayout, PipelineShaderStageCreateInfo,
         layout::PipelineDescriptorSetLayoutCreateInfo,
     },
+    swapchain::{Surface, Swapchain, SwapchainCreateInfo},
     sync::{self, GpuFuture},
 };
+use winit::window::Window;
 
-use crate::error::CrateResult;
+use crate::error::{CrateError, CrateResult};
 
 #[derive(Debug, Clone)]
 pub struct VkDevice {
     device: Arc<Device>,
     queue_family_index: u32,
     queues: Vec<Arc<Queue>>,
+    swapchain: Arc<Swapchain>,
+    swapchain_images: Vec<Arc<Image>>,
     mem_allocator: Arc<StandardMemoryAllocator>,
     cmd_allocator: Arc<StandardCommandBufferAllocator>,
     desc_allocator: Arc<StandardDescriptorSetAllocator>,
@@ -35,6 +39,8 @@ pub struct VkDevice {
 impl VkDevice {
     pub(super) fn new(
         device: Arc<Device>,
+        window: Arc<Window>,
+        surface: Arc<Surface>,
         queue_family_index: u32,
         queues: Vec<Arc<Queue>>,
     ) -> CrateResult<Self> {
@@ -48,10 +54,39 @@ impl VkDevice {
             Default::default(),
         ));
 
+        let physical_device = device.physical_device();
+        let caps = physical_device.surface_capabilities(&surface, Default::default())?;
+
+        let dimensions = window.inner_size();
+        let composite_alpha = caps
+            .supported_composite_alpha
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                CrateError::missing_data("No supported compose alpha mode in surface")
+            })?;
+
+        let image_format = physical_device.surface_formats(&surface, Default::default())?[0].0;
+
+        let (swapchain, swapchain_images) = Swapchain::new(
+            device.clone(),
+            surface,
+            SwapchainCreateInfo {
+                min_image_count: caps.min_image_count + 1,
+                image_format,
+                image_extent: dimensions.into(),
+                image_usage: ImageUsage::COLOR_ATTACHMENT,
+                composite_alpha,
+                ..Default::default()
+            },
+        )?;
+
         Ok(Self {
             device,
             queues,
             queue_family_index,
+            swapchain,
+            swapchain_images,
             mem_allocator,
             cmd_allocator,
             desc_allocator,

@@ -4,7 +4,12 @@ use image::ImageError;
 use vulkano::{
     LoadingError, Validated, ValidationError, VulkanError, buffer::AllocateBufferError,
     command_buffer::CommandBufferExecError, image::AllocateImageError,
-    pipeline::layout::IntoPipelineLayoutCreateInfoError, sync::HostAccessError,
+    pipeline::layout::IntoPipelineLayoutCreateInfoError, swapchain::FromWindowError,
+    sync::HostAccessError,
+};
+use winit::{
+    error::{EventLoopError, OsError},
+    raw_window_handle::HandleError,
 };
 
 #[derive(Debug)]
@@ -17,6 +22,10 @@ pub enum CrateError {
     VkCmdBufferExec(CommandBufferExecError),
     VkPipelineInfo(IntoPipelineLayoutCreateInfoError),
     VkImage(AllocateImageError),
+    VkWindowSetup(FromWindowError),
+    WinitEventLoop(EventLoopError),
+    WinitHandle(HandleError),
+    WinitOsErr(OsError),
     ImageProcessing(ImageError),
     BadArguments(String),
     MissingData(String),
@@ -44,6 +53,10 @@ impl Display for CrateError {
             Self::VkCmdBufferExec(err) => write!(f, "Vulkan command buffer exec error ({err})"),
             Self::VkPipelineInfo(err) => write!(f, "Vulkan pipeline layout creation error ({err})"),
             Self::VkImage(err) => write!(f, "Vulkan image allocation error ({err})"),
+            Self::VkWindowSetup(err) => write!(f, "Vulkan window setup error ({err})"),
+            Self::WinitEventLoop(err) => write!(f, "Winit event-handler error ({err})"),
+            Self::WinitHandle(err) => write!(f, "Winit handle error ({err})"),
+            Self::WinitOsErr(err) => write!(f, "Winit OS error ({err})"),
             Self::ImageProcessing(err) => write!(f, "Error in image-handling library ({err})"),
             Self::BadArguments(msg) => write!(f, "Bad arguments supplied ({msg})"),
             Self::MissingData(msg) => write!(f, "Missing expected data ({msg})"),
@@ -63,6 +76,10 @@ impl Error for CrateError {
             Self::VkCmdBufferExec(err) => Some(err),
             Self::VkPipelineInfo(err) => Some(err),
             Self::VkImage(err) => Some(err),
+            Self::VkWindowSetup(err) => Some(err),
+            Self::WinitEventLoop(err) => Some(err),
+            Self::WinitHandle(err) => Some(err),
+            Self::WinitOsErr(err) => Some(err),
             Self::ImageProcessing(err) => Some(err),
             Self::BadArguments(_) | Self::MissingData(_) | Self::NoCompatibleDevice => None,
         }
@@ -117,6 +134,12 @@ impl From<AllocateImageError> for CrateError {
     }
 }
 
+impl From<FromWindowError> for CrateError {
+    fn from(value: FromWindowError) -> Self {
+        Self::VkWindowSetup(value)
+    }
+}
+
 impl<E> From<Validated<E>> for CrateError
 where
     E: Into<CrateError> + Error + 'static,
@@ -141,6 +164,24 @@ where
 impl From<ImageError> for CrateError {
     fn from(value: ImageError) -> Self {
         Self::ImageProcessing(value)
+    }
+}
+
+impl From<EventLoopError> for CrateError {
+    fn from(value: EventLoopError) -> Self {
+        Self::WinitEventLoop(value)
+    }
+}
+
+impl From<HandleError> for CrateError {
+    fn from(value: HandleError) -> Self {
+        Self::WinitHandle(value)
+    }
+}
+
+impl From<OsError> for CrateError {
+    fn from(value: OsError) -> Self {
+        Self::WinitOsErr(value)
     }
 }
 
