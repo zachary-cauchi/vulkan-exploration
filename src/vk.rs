@@ -1,16 +1,18 @@
 pub mod device;
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, trace, warn};
 use vulkano::{
-    Version, VulkanLibrary,
+    Version, VulkanError, VulkanLibrary,
     device::{
         Device, DeviceCreateInfo, DeviceExtensions, QueueCreateInfo, QueueFlags,
         physical::{PhysicalDevice, PhysicalDeviceType},
     },
+    image::{Image, ImageUsage, view::ImageView},
     instance::{Instance, InstanceCreateFlags, InstanceCreateInfo},
-    swapchain::{Surface, Swapchain},
+    render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass},
+    swapchain::{Surface, Swapchain, SwapchainCreateInfo, acquire_next_image},
 };
 use winit::{
     application::ApplicationHandler,
@@ -21,6 +23,7 @@ use winit::{
 
 use crate::{
     error::{CrateError, CrateResult},
+    examples,
     vk::device::VkDevice,
 };
 
@@ -32,6 +35,8 @@ pub struct VkContext {
     surface: Option<Arc<Surface>>,
     window: Option<Arc<Window>>,
     active_device: Option<Arc<VkDevice>>,
+    swapchain: Option<Arc<Swapchain>>,
+    swapchain_images: Vec<Arc<Image>>,
 }
 
 impl VkContext {
@@ -55,16 +60,18 @@ impl VkContext {
 
         Ok(Self {
             instance: vk_instance,
-            recreate_swapchain: true,
-            window_resized: true,
+            recreate_swapchain: false,
+            window_resized: false,
             window: None,
             surface: None,
             active_device: None,
+            swapchain: None,
+            swapchain_images: vec![],
         })
     }
 
     fn create_window(&mut self, event_loop: &ActiveEventLoop) -> CrateResult<()> {
-        let attributes = WindowAttributes::default();
+        let attributes = WindowAttributes::default().with_title("Vulkan exploration");
 
         let window = Arc::new(event_loop.create_window(attributes)?);
         let surface = Surface::from_window(self.instance.clone(), window.clone())?;
@@ -111,9 +118,9 @@ impl VkContext {
             return Err(CrateError::bad_arguments("No queue capabilities specified"));
         }
 
-        let Some((surface, window)) = self.surface.clone().zip(self.window.clone()) else {
+        let Some(surface) = self.surface.clone() else {
             return Err(CrateError::missing_data(
-                "Surface and window not yet initialised",
+                "Vulkan surface not yet initialised",
             ));
         };
 
@@ -128,7 +135,7 @@ impl VkContext {
             .instance
             .enumerate_physical_devices()?
             // First filter by required extensions.
-            .filter(|pd| pd.supported_extensions().contains(&required_extensions))
+            .filter(|pd| pd.supported_extensions().contains(required_extensions))
             .filter_map(|pd| {
                 // Get the queue family index with the greatest queue quantity for the required queue features
                 // and surface support.
@@ -179,13 +186,165 @@ impl VkContext {
 
         debug!("Device created.");
 
-        VkDevice::new(
+        VkDevice::new(device, queue_family_index as u32, queues.collect())
+    }
+
+    fn create_swapchain(&mut self, device: Arc<Device>) -> CrateResult<()> {
+        let window = self
+            .window
+            .clone()
+            .ok_or_else(|| CrateError::missing_data("Window is uninitialised"))?;
+        let surface = self
+            .surface
+            .clone()
+            .ok_or_else(|| CrateError::missing_data("Surface is uninitialised"))?;
+
+        let physical_device = device.physical_device();
+        let caps = physical_device.surface_capabilities(&surface, Default::default())?;
+
+        // SAFETY: Already knwon to be `Some` from above check.
+        let dimensions = window.inner_size();
+
+        let composite_alpha = caps
+            .supported_composite_alpha
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                CrateError::missing_data("No supported compose alpha mode in surface")
+            })?;
+
+        let image_format = physical_device.surface_formats(&surface, Default::default())?[0].0;
+
+        debug!("Creating swapchain");
+
+        let (swapchain, swapchain_images) = Swapchain::new(
             device,
-            window,
             surface,
-            queue_family_index as u32,
-            queues.collect(),
-        )
+            SwapchainCreateInfo {
+                min_image_count: caps.min_image_count + 1,
+                image_format,
+                image_extent: dimensions.into(),
+                image_usage: ImageUsage::COLOR_ATTACHMENT,
+                composite_alpha,
+                ..Default::default()
+            },
+        )?;
+
+        self.swapchain.replace(swapchain);
+        self.swapchain_images = swapchain_images;
+
+        Ok(())
+    }
+
+    pub fn build_framebuffers(
+        &self,
+        render_pass: Arc<RenderPass>,
+    ) -> CrateResult<Vec<Arc<Framebuffer>>> {
+        let framebuffers = self
+            .swapchain_images
+            .iter()
+            .map(|img| {
+                let view = ImageView::new_default(img.clone())?;
+                let info = FramebufferCreateInfo {
+                    attachments: vec![view],
+                    ..Default::default()
+                };
+                Ok(Framebuffer::new(render_pass.clone(), info)?)
+            })
+            .collect::<CrateResult<Vec<_>>>()?;
+
+        Ok(framebuffers)
+    }
+
+    pub fn recreate_swapchain(&mut self, window: Arc<Window>) -> CrateResult<()> {
+        let swapchain = self
+            .swapchain
+            .clone()
+            .ok_or_else(|| CrateError::missing_data("Swapchain not initialised"))?;
+
+        debug!("Recreating swapchain.");
+
+        let new_dimensions = window.inner_size();
+
+        let (new_swapchain, new_images) = swapchain.recreate(SwapchainCreateInfo {
+            image_extent: new_dimensions.into(),
+            ..swapchain.create_info()
+        })?;
+
+        self.swapchain.replace(new_swapchain);
+
+        self.swapchain_images.clear();
+        self.swapchain_images = new_images;
+
+        Ok(())
+    }
+
+    fn redraw(&mut self, window: Arc<Window>) -> CrateResult<()> {
+        if self.recreate_swapchain {
+            self.recreate_swapchain(window)
+                .inspect_err(|e| error!("Failed to recreate swapchain. Error: {e}"))?;
+        }
+
+        let device = self
+            .active_device
+            .clone()
+            .ok_or_else(|| CrateError::missing_data("No device initialised."))?;
+
+        // SAFETY: Swapchain asserted to be `Some` above.
+        let swapchain = self.swapchain().unwrap();
+
+        debug!("Issuing redraw.");
+
+        let cmd_buffers = examples::example_framebuffers_pipelines(self)?;
+        let acquire_timeout = Duration::from_secs(1);
+
+        let (image_index, is_suboptimal, future) =
+            acquire_next_image(swapchain.clone(), Some(acquire_timeout))?;
+
+        // // SAFETY: The vector is guaranteed to us by vulkano to not be empty and the index to always be valid.
+        // let next_image = self.swapchain_images[next_image_stats.image_index as usize].clone();
+
+        if is_suboptimal {
+            warn!(
+                "Acquired image ({}) is suboptimal. This shouldn't happen since we just recreated the swapchain.",
+                image_index
+            );
+            self.recreate_swapchain = true;
+            return Ok(());
+        }
+
+        debug!("Acquired image ({}).", image_index);
+
+        let cmd_buffer = cmd_buffers[image_index as usize].clone();
+
+        let res =
+            device.send_to_device_get_swapchain_image(cmd_buffer, swapchain, image_index, future);
+
+        match res {
+            Ok(_) => {}
+            Err(CrateError::VkError(VulkanError::OutOfDate)) => {
+                warn!("Command buffer failed: Out of date.");
+                self.recreate_swapchain = true;
+                return Ok(());
+            }
+            Err(e) => {
+                return Err(e);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn active_device(&self) -> Option<Arc<VkDevice>> {
+        self.active_device.clone()
+    }
+
+    pub fn window(&self) -> Option<Arc<Window>> {
+        self.window.clone()
+    }
+
+    pub fn swapchain(&self) -> Option<Arc<Swapchain>> {
+        self.swapchain.clone()
     }
 }
 
@@ -196,7 +355,7 @@ impl ApplicationHandler for VkContext {
         if self.window.is_some() && self.surface.is_some() {
             debug!("Window and surface already initialised.");
             return;
-        }
+        };
 
         if let Err(e) = self.create_window(event_loop) {
             error!("Failed to resume. Error: {e}");
@@ -209,13 +368,22 @@ impl ApplicationHandler for VkContext {
             ..Default::default()
         };
 
-        match self.create_device(required_caps, &required_device_extensions) {
-            Ok(d) => self.active_device = Some(Arc::new(d)),
+        let vk_device = match self.create_device(required_caps, &required_device_extensions) {
+            Ok(d) => Arc::new(d),
             Err(e) => {
                 error!("Failed to resume. Error: {e}");
                 return event_loop.exit();
             }
         };
+
+        let device = vk_device.device();
+
+        self.active_device = Some(vk_device);
+
+        if let Err(e) = self.create_swapchain(device) {
+            error!("Failed to create swapchain. Error: {e}");
+            event_loop.exit()
+        }
     }
 
     fn window_event(
@@ -224,24 +392,26 @@ impl ApplicationHandler for VkContext {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        let Some(_) = self.window.as_ref().filter(|w| w.id() == window_id) else {
+        let Some(window) = self.window.clone().filter(|w| w.id() == window_id) else {
             error!("No window with ID {window_id:?} found. Not processing event {event:?}");
             return;
         };
 
         match event {
-            WindowEvent::CloseRequested => {
-                event_loop.exit();
-            }
+            WindowEvent::Destroyed | WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(s) => {
                 debug!("Window resize to {s:?}.");
+                self.recreate_swapchain = true;
                 self.window_resized = true;
             }
             WindowEvent::RedrawRequested => {
                 debug!("Redraw requested.");
-                // window.request_redraw();
+                if let Err(e) = self.redraw(window) {
+                    error!("Error during screen redraw. Error: {e}");
+                    event_loop.exit()
+                }
             }
-            event => debug!("Unimplemented window event {event:?}"),
+            event => trace!("Unimplemented window event {event:?}"),
         }
     }
 }

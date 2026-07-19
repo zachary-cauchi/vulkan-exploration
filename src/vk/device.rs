@@ -11,26 +11,23 @@ use vulkano::{
         allocator::StandardDescriptorSetAllocator, layout::DescriptorSetLayout,
     },
     device::{Device, Queue},
-    image::{Image, ImageCreateInfo, ImageUsage},
+    image::{Image, ImageCreateInfo},
     memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
     pipeline::{
         PipelineLayout, PipelineShaderStageCreateInfo,
         layout::PipelineDescriptorSetLayoutCreateInfo,
     },
-    swapchain::{Surface, Swapchain, SwapchainCreateInfo},
-    sync::{self, GpuFuture},
+    swapchain::{Swapchain, SwapchainAcquireFuture, SwapchainPresentInfo},
+    sync::{self, GpuFuture, fence::Fence},
 };
-use winit::window::Window;
 
-use crate::error::{CrateError, CrateResult};
+use crate::error::CrateResult;
 
 #[derive(Debug, Clone)]
 pub struct VkDevice {
     device: Arc<Device>,
     queue_family_index: u32,
     queues: Vec<Arc<Queue>>,
-    swapchain: Arc<Swapchain>,
-    swapchain_images: Vec<Arc<Image>>,
     mem_allocator: Arc<StandardMemoryAllocator>,
     cmd_allocator: Arc<StandardCommandBufferAllocator>,
     desc_allocator: Arc<StandardDescriptorSetAllocator>,
@@ -39,8 +36,6 @@ pub struct VkDevice {
 impl VkDevice {
     pub(super) fn new(
         device: Arc<Device>,
-        window: Arc<Window>,
-        surface: Arc<Surface>,
         queue_family_index: u32,
         queues: Vec<Arc<Queue>>,
     ) -> CrateResult<Self> {
@@ -54,39 +49,10 @@ impl VkDevice {
             Default::default(),
         ));
 
-        let physical_device = device.physical_device();
-        let caps = physical_device.surface_capabilities(&surface, Default::default())?;
-
-        let dimensions = window.inner_size();
-        let composite_alpha = caps
-            .supported_composite_alpha
-            .into_iter()
-            .next()
-            .ok_or_else(|| {
-                CrateError::missing_data("No supported compose alpha mode in surface")
-            })?;
-
-        let image_format = physical_device.surface_formats(&surface, Default::default())?[0].0;
-
-        let (swapchain, swapchain_images) = Swapchain::new(
-            device.clone(),
-            surface,
-            SwapchainCreateInfo {
-                min_image_count: caps.min_image_count + 1,
-                image_format,
-                image_extent: dimensions.into(),
-                image_usage: ImageUsage::COLOR_ATTACHMENT,
-                composite_alpha,
-                ..Default::default()
-            },
-        )?;
-
         Ok(Self {
             device,
             queues,
             queue_family_index,
-            swapchain,
-            swapchain_images,
             mem_allocator,
             cmd_allocator,
             desc_allocator,
@@ -178,6 +144,34 @@ impl VkDevice {
         Ok(())
     }
 
+    /// Sends one command buffer to the GPU and presents a swapchain image afterwards.
+    /// Joins on the supplied future, waiting for it to complete before sending to the device.
+    pub fn send_to_device_get_swapchain_image(
+        &self,
+        cmd_buffer: Arc<PrimaryAutoCommandBuffer>,
+        swapchain: Arc<Swapchain>,
+        image_index: u32,
+        swapchain_future: SwapchainAcquireFuture,
+    ) -> CrateResult<()> {
+        // SAFETY: Already confirmed at initialisation to have at least one element.
+        let queue = self.queues.first().unwrap();
+
+        let future = sync::now(self.device.clone())
+            .join(swapchain_future)
+            .then_execute(queue.clone(), cmd_buffer)?;
+
+        let future = future
+            .then_swapchain_present(
+                queue.clone(),
+                SwapchainPresentInfo::swapchain_image_index(swapchain, image_index),
+            )
+            .then_signal_fence_and_flush()?;
+
+        future.wait(None)?;
+
+        Ok(())
+    }
+
     pub fn descriptor_set(
         &self,
         layout: Arc<DescriptorSetLayout>,
@@ -209,6 +203,11 @@ impl VkDevice {
         )?;
 
         Ok(image)
+    }
+
+    pub fn new_fence(&self) -> CrateResult<Fence> {
+        let fence = Fence::from_pool(self.device.clone())?;
+        Ok(fence)
     }
 
     pub fn auto_pipeline_layout<'a>(

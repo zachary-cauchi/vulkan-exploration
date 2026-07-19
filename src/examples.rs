@@ -8,7 +8,8 @@ use vulkano::{
     buffer::{BufferUsage, Subbuffer},
     command_buffer::{
         ClearColorImageInfo, CommandBufferUsage, CopyBufferInfo, CopyImageToBufferInfo,
-        RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo,
+        PrimaryAutoCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents,
+        SubpassEndInfo,
     },
     descriptor_set::WriteDescriptorSet,
     format::{ClearColorValue, Format},
@@ -36,7 +37,7 @@ use vulkano::{
 use crate::{
     error::{CrateError, CrateResult},
     shape::{Shape2D, Vertex2Df},
-    vk::device::VkDevice,
+    vk::{VkContext, device::VkDevice},
 };
 
 const DIM_X: u32 = 1024;
@@ -45,7 +46,7 @@ const DIM_Z: u32 = 1;
 const DIMENSIONS: [u32; 3] = [DIM_X, DIM_Y, DIM_Z];
 const BUFFER_SIZE: u32 = DIM_X * DIM_Y * DIM_Z * 4;
 
-pub fn example_allocate_memory_buffer(device: VkDevice) -> CrateResult<()> {
+pub fn example_allocate_memory_buffer(device: Arc<VkDevice>) -> CrateResult<()> {
     debug!("Allocating some data.");
 
     let subbuffer = device.alloc_host_data(
@@ -67,7 +68,7 @@ pub fn example_allocate_memory_buffer(device: VkDevice) -> CrateResult<()> {
     Ok(())
 }
 
-pub fn example_copy_between_buffers(device: VkDevice) -> CrateResult<()> {
+pub fn example_copy_between_buffers(device: Arc<VkDevice>) -> CrateResult<()> {
     debug!("Initialising source buffer.");
 
     let src_content = [1, 2, 4, 8];
@@ -109,7 +110,7 @@ pub fn example_copy_between_buffers(device: VkDevice) -> CrateResult<()> {
     Ok(())
 }
 
-pub fn example_perform_compute(device: VkDevice) -> CrateResult<()> {
+pub fn example_perform_compute(device: Arc<VkDevice>) -> CrateResult<()> {
     debug!("Compute shader example entered.");
 
     let data_list = 0..65536u32;
@@ -205,7 +206,7 @@ pub fn example_perform_compute(device: VkDevice) -> CrateResult<()> {
     Ok(())
 }
 
-pub fn example_image(device: VkDevice) -> CrateResult<()> {
+pub fn example_image(device: Arc<VkDevice>) -> CrateResult<()> {
     const IMG_SAVE_PATH: &str = "out/image.png";
 
     debug!("Creating source image.");
@@ -263,7 +264,7 @@ pub fn example_image(device: VkDevice) -> CrateResult<()> {
     Ok(())
 }
 
-pub fn example_mandelbrot_compute(device: VkDevice) -> CrateResult<()> {
+pub fn example_mandelbrot_compute(device: Arc<VkDevice>) -> CrateResult<()> {
     const IMG_SAVE_PATH: &str = "out/mandelbrot.png";
 
     debug!("Creating image and image view.");
@@ -360,7 +361,7 @@ pub fn example_mandelbrot_compute(device: VkDevice) -> CrateResult<()> {
     Ok(())
 }
 
-pub fn example_graphics_pipeline(device: VkDevice) -> CrateResult<()> {
+pub fn example_graphics_pipeline(device: Arc<VkDevice>) -> CrateResult<()> {
     const IMG_SAVE_PATH: &str = "out/graphics_pipeline.png";
 
     debug!("Creating triangle and vertex buffer.");
@@ -529,4 +530,145 @@ pub fn example_graphics_pipeline(device: VkDevice) -> CrateResult<()> {
     final_image.save(IMG_SAVE_PATH)?;
 
     Ok(())
+}
+
+pub fn example_framebuffers_pipelines(
+    instance: &VkContext,
+) -> CrateResult<Vec<Arc<PrimaryAutoCommandBuffer>>> {
+    let device = instance
+        .active_device()
+        .ok_or_else(|| CrateError::missing_data("Instance device is uninitialised"))?;
+    let window = instance
+        .window()
+        .ok_or_else(|| CrateError::missing_data("Instance window is uninitialised"))?;
+
+    let swapchain = instance
+        .swapchain()
+        .ok_or_else(|| CrateError::missing_data("Instance swapchain is uninitialised"))?;
+
+    debug!("Creating triangle and vertex buffer.");
+
+    let triangle = Shape2D::new([
+        Vertex2Df::new_xy(-0.5, -0.5),
+        Vertex2Df::new_xy(0.0, 0.5),
+        Vertex2Df::new_xy(0.5, -0.25),
+    ]);
+
+    let vertex_buffer: Subbuffer<[Vertex2Df]> = device.alloc_host_iter(
+        BufferUsage::VERTEX_BUFFER,
+        MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+        triangle.vertices.iter().copied(),
+    )?;
+
+    debug!("Creating renderpass object.");
+
+    let render_pass = vulkano::single_pass_renderpass!(
+        device.device(),
+        attachments: {
+            color: {
+                format: swapchain.image_format(),
+                samples: 1,
+                load_op: Clear,
+                store_op: Store
+            },
+        },
+        pass: {
+            color: [color],
+            depth_stencil: {},
+        }
+    )?;
+
+    debug!("Getting framebuffers.");
+
+    let framebuffers = instance.build_framebuffers(render_pass.clone())?;
+
+    debug!("Creating graphics pipeline.");
+
+    let vs = shaders::vertex_basic::load(device.device())?;
+    let fs = shaders::fragment_basic::load(device.device())?;
+
+    let viewport = Viewport {
+        offset: [0.0, 0.0],
+        extent: window.inner_size().into(),
+        depth_range: 0.0..=1.0,
+    };
+
+    // SAFETY: These will always be Some because the shaders have the `main` entrypoint at compile-time.
+    let vs_entrypoint = vs.entry_point("main").unwrap();
+    let fs_entrypoint = fs.entry_point("main").unwrap();
+
+    let vertex_input_state = Vertex2Df::per_vertex().definition(&vs_entrypoint)?;
+
+    let stages = [
+        PipelineShaderStageCreateInfo::new(vs_entrypoint),
+        PipelineShaderStageCreateInfo::new(fs_entrypoint),
+    ];
+
+    let layout = PipelineLayout::new(
+        device.device(),
+        PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
+            .into_pipeline_layout_create_info(device.device())?,
+    )?;
+
+    let subpass_id = 0;
+    let subpass = Subpass::from(render_pass.clone(), subpass_id)
+        .ok_or_else(|| CrateError::bad_arguments("Expected subpass, but failed."))?;
+
+    let graphics_pipeline = GraphicsPipeline::new(
+        device.device(),
+        None,
+        GraphicsPipelineCreateInfo {
+            stages: stages.into_iter().collect(),
+            vertex_input_state: Some(vertex_input_state),
+            input_assembly_state: Some(InputAssemblyState::default()),
+            viewport_state: Some(ViewportState {
+                viewports: [viewport].into_iter().collect(),
+                ..Default::default()
+            }),
+            rasterization_state: Some(RasterizationState::default()),
+            multisample_state: Some(MultisampleState::default()),
+            color_blend_state: Some(ColorBlendState::with_attachment_states(
+                subpass.num_color_attachments(),
+                ColorBlendAttachmentState::default(),
+            )),
+            subpass: Some(subpass.into()),
+            ..GraphicsPipelineCreateInfo::layout(layout)
+        },
+    )?;
+
+    debug!("Constructing render pass commands.");
+
+    let cmd_buffers = framebuffers
+        .into_iter()
+        .map(|fb| {
+            let mut cmd_buffer_builder =
+                device.primary_cmd_buffer(CommandBufferUsage::MultipleSubmit)?;
+
+            cmd_buffer_builder
+                .begin_render_pass(
+                    RenderPassBeginInfo {
+                        clear_values: vec![Some([0.0, 1.0, 1.0, 1.0].into())],
+                        ..RenderPassBeginInfo::framebuffer(fb.clone())
+                    },
+                    SubpassBeginInfo {
+                        contents: SubpassContents::Inline,
+                        ..Default::default()
+                    },
+                )?
+                .bind_pipeline_graphics(graphics_pipeline.clone())?
+                .bind_vertex_buffers(0, vertex_buffer.clone())?;
+
+            // SAFETY: There is no 'safe' way to issue draw commands.
+            // As such, we have to trust we did everything right to have some confidence in its safety.
+            unsafe {
+                cmd_buffer_builder.draw(triangle.vertices.len() as u32, 1, 0, 0)?;
+            }
+
+            cmd_buffer_builder.end_render_pass(SubpassEndInfo::default())?;
+
+            Ok(cmd_buffer_builder.build()?)
+        })
+        .collect::<CrateResult<Vec<_>>>()?;
+
+    Ok(cmd_buffers)
 }

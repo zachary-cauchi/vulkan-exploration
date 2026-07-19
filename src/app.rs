@@ -1,17 +1,5 @@
-use std::sync::Arc;
-
-use tracing::{debug, error, info};
-use vulkano::{
-    device::{DeviceExtensions, QueueFlags},
-    swapchain::Surface,
-};
-use winit::{
-    application::ApplicationHandler,
-    event::WindowEvent,
-    event_loop::{ActiveEventLoop, EventLoop},
-    platform::wayland::ActiveEventLoopExtWayland,
-    window::{Window, WindowAttributes, WindowId},
-};
+use tracing::{debug, info};
+use winit::event_loop::EventLoop;
 
 use crate::{
     error::CrateResult,
@@ -32,26 +20,23 @@ pub fn run() -> CrateResult<()> {
 
     info!("Creating graphics device.");
 
-    let required_device_extensions = DeviceExtensions {
-        khr_display_swapchain: true,
-        ..Default::default()
-    };
-
     vk_context.run_app(event_loop)?;
 
-    // debug!("Device: {device:?}");
+    let device = vk_context.active_device().unwrap();
 
-    // example_allocate_memory_buffer(device.clone())?;
+    debug!("Device: {device:?}");
 
-    // example_copy_between_buffers(device.clone())?;
+    example_allocate_memory_buffer(device.clone())?;
 
-    // example_perform_compute(device.clone())?;
+    example_copy_between_buffers(device.clone())?;
 
-    // example_image(device.clone())?;
+    example_perform_compute(device.clone())?;
 
-    // example_mandelbrot_compute(device.clone())?;
+    example_image(device.clone())?;
 
-    // example_graphics_pipeline(device)?;
+    example_mandelbrot_compute(device.clone())?;
+
+    example_graphics_pipeline(device)?;
 
     info!("Examples finished.");
 
