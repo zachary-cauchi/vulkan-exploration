@@ -22,7 +22,7 @@ pub fn run() -> CrateResult<()> {
 
     vk_context.run_app(event_loop)?;
 
-    let device = vk_context.active_device().unwrap();
+    let device = vk_context.state().get_device().unwrap();
 
     debug!("Device: {device:?}");
 

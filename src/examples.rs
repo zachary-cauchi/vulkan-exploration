@@ -535,16 +535,10 @@ pub fn example_graphics_pipeline(device: Arc<VkDevice>) -> CrateResult<()> {
 pub fn example_framebuffers_pipelines(
     instance: &VkContext,
 ) -> CrateResult<Vec<Arc<PrimaryAutoCommandBuffer>>> {
-    let device = instance
-        .active_device()
-        .ok_or_else(|| CrateError::missing_data("Instance device is uninitialised"))?;
-    let window = instance
-        .window()
-        .ok_or_else(|| CrateError::missing_data("Instance window is uninitialised"))?;
-
-    let swapchain = instance
-        .swapchain()
-        .ok_or_else(|| CrateError::missing_data("Instance swapchain is uninitialised"))?;
+    let state = instance.state();
+    let device = state.get_device()?;
+    let window = state.get_window()?;
+    let swapchain = state.get_swapchain()?;
 
     debug!("Creating triangle and vertex buffer.");
 
