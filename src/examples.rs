@@ -634,14 +634,22 @@ pub fn example_framebuffers_pipelines(
 
     let cmd_buffers = framebuffers
         .into_iter()
-        .map(|fb| {
+        .enumerate()
+        .map(|(i, fb)| {
             let mut cmd_buffer_builder =
                 device.primary_cmd_buffer(CommandBufferUsage::MultipleSubmit)?;
+
+            let bg_colour = match i % 3 {
+                0 => [0.0, 1.0, 1.0, 1.0],
+                1 => [1.0, 0.0, 1.0, 1.0],
+                2 => [1.0, 1.0, 0.0, 1.0],
+                i => unreachable!("Unreachable due to modulus. Got {i}"),
+            };
 
             cmd_buffer_builder
                 .begin_render_pass(
                     RenderPassBeginInfo {
-                        clear_values: vec![Some([0.0, 1.0, 1.0, 1.0].into())],
+                        clear_values: vec![Some(bg_colour.into())],
                         ..RenderPassBeginInfo::framebuffer(fb.clone())
                     },
                     SubpassBeginInfo {
