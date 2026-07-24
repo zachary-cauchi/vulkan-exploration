@@ -114,8 +114,6 @@ impl VkContext {
             self.recreate_swapchain = false;
         }
 
-        let device = self.state.get_device()?;
-
         // SAFETY: Swapchain asserted to be `Some` above.
         let swapchain = self.state.get_swapchain().unwrap();
 
@@ -140,22 +138,19 @@ impl VkContext {
 
         let cmd_buffer = cmd_buffers[image_index as usize].clone();
 
-        let res =
-            device.send_to_device_get_swapchain_image(cmd_buffer, swapchain, image_index, future);
+        let result =
+            self.state
+                .execute_cmd_buffer_against_swapchain(cmd_buffer, future, image_index);
 
-        match res {
-            Ok(_) => {}
+        match result {
+            Ok(_) => Ok(()),
             Err(CrateError::VkError(VulkanError::OutOfDate)) => {
                 warn!("Command buffer failed: Out of date.");
                 self.recreate_swapchain = true;
-                return Ok(());
+                Ok(())
             }
-            Err(e) => {
-                return Err(e);
-            }
+            Err(e) => Err(e),
         }
-
-        Ok(())
     }
 
     pub fn state(&self) -> &VkState {

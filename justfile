@@ -6,9 +6,12 @@ pre-commit-all:
     pre-commit run --all-files
 
 # Run 'cargo run' on the project
-run *ARGS:
-    cargo run {{ARGS}}
+run:
+    cargo run -- -l DEBUG
 
 # Run 'bacon' to run the project (auto-recompiles)
 watch *ARGS:
 	bacon --job run -- -- {{ ARGS }}
+
+clip:
+    cargo clippy -- -D warnings

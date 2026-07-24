@@ -1,14 +1,19 @@
-use std::sync::Arc;
+use std::{cell::Cell, sync::Arc};
 
-use tracing::{debug, error, instrument};
+use tracing::{debug, error, instrument, warn};
 use vulkano::{
+    command_buffer::{CommandBufferExecFuture, PrimaryAutoCommandBuffer},
     device::{
         Device, DeviceCreateInfo, DeviceExtensions, QueueCreateInfo, QueueFlags,
         physical::PhysicalDeviceType,
     },
     image::{Image, ImageUsage},
     instance::Instance,
-    swapchain::{Surface, Swapchain, SwapchainCreateInfo},
+    swapchain::{PresentFuture, Surface, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo},
+    sync::{
+        self, GpuFuture,
+        future::{FenceSignalFuture, JoinFuture},
+    },
 };
 use winit::{
     event_loop::ActiveEventLoop,
@@ -20,6 +25,10 @@ use crate::{
     vk::device::VkDevice,
 };
 
+type StoredSwapchainFuture = FenceSignalFuture<
+    PresentFuture<CommandBufferExecFuture<JoinFuture<Box<dyn GpuFuture>, SwapchainAcquireFuture>>>,
+>;
+
 #[derive(Clone)]
 pub struct VkState {
     instance: Arc<Instance>,
@@ -28,6 +37,8 @@ pub struct VkState {
     device: Option<Arc<VkDevice>>,
     swapchain: Option<Arc<Swapchain>>,
     swapchain_images: Vec<Arc<Image>>,
+    swapchain_fences: Vec<Option<Arc<StoredSwapchainFuture>>>,
+    prev_frame: Cell<usize>,
 }
 
 impl VkState {
@@ -39,6 +50,8 @@ impl VkState {
             device: None,
             swapchain: None,
             swapchain_images: vec![],
+            swapchain_fences: vec![],
+            prev_frame: Cell::new(0),
         }
     }
 
@@ -68,6 +81,67 @@ impl VkState {
 
     pub fn get_swapchain_images(&self) -> &[Arc<Image>] {
         self.swapchain_images.as_slice()
+    }
+
+    pub fn get_image_fence(&self, index: usize) -> CrateResult<Box<dyn GpuFuture>> {
+        // Ensure the current image fence (if present) is completed to avoid race conditions
+        // With accidentally using the image before it's released.
+        if let Some(image_fence) = &self.swapchain_fences[index] {
+            image_fence.wait(None)?;
+        }
+
+        // If the previous image is still being processed (`Some`), return that future.
+        // Else, create a general device-sync future.
+        let prev_future = match self.swapchain_fences[self.prev_frame.get()].clone() {
+            None => {
+                let mut now = sync::now(self.get_device()?.device());
+                now.cleanup_finished();
+                now.boxed()
+            }
+            Some(fence) => fence.boxed(),
+        };
+
+        self.prev_frame.set(index);
+
+        Ok(prev_future)
+    }
+
+    pub fn execute_cmd_buffer_against_swapchain(
+        &mut self,
+        cmd_buffer: Arc<PrimaryAutoCommandBuffer>,
+        swapchain_future: SwapchainAcquireFuture,
+        image_index: u32,
+    ) -> CrateResult<()> {
+        let device = self.get_device()?;
+        let swapchain = self.get_swapchain()?;
+
+        // Get the next image future to wait upon before issuing cmd buffer executions.
+        // Syncing with the device every frame can be costly, so instead of waiting on the device,
+        // continue execution from the previous frame future (which will have already synced with the device).
+        // We can't reuse resources from an in-progress frame in another frame anyways,
+        // so we don't lose anything by doing this.
+        let future = self
+            .get_image_fence(image_index as usize)?
+            .join(swapchain_future);
+
+        // Send the command buffer to the GPU and present a swapchain image afterwards.
+        let res = device
+            .with_future(future)
+            .execute(cmd_buffer)?
+            .present_swapchain(swapchain, image_index)?
+            .signal_fence_and_flush();
+
+        match res {
+            Ok(new_future) => {
+                let future = Arc::new(new_future.unwrap_future());
+                self.swapchain_fences[image_index as usize] = Some(future);
+                Ok(())
+            }
+            Err(e) => {
+                self.swapchain_fences[image_index as usize] = None;
+                Err(e)
+            }
+        }
     }
 
     pub fn create_window(&mut self, event_loop: &ActiveEventLoop) -> CrateResult<()> {
@@ -211,6 +285,8 @@ impl VkState {
 
         self.swapchain.replace(swapchain);
         self.swapchain_images = swapchain_images;
+        self.swapchain_fences = vec![None; self.swapchain_images.len()];
+        self.prev_frame.set(0);
 
         Ok(())
     }

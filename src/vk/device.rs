@@ -3,7 +3,8 @@ use std::sync::Arc;
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
-        AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer,
+        AutoCommandBufferBuilder, CommandBufferExecFuture, CommandBufferUsage,
+        PrimaryAutoCommandBuffer,
         allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo},
     },
     descriptor_set::{
@@ -17,11 +18,15 @@ use vulkano::{
         PipelineLayout, PipelineShaderStageCreateInfo,
         layout::PipelineDescriptorSetLayoutCreateInfo,
     },
-    swapchain::{Swapchain, SwapchainAcquireFuture, SwapchainPresentInfo},
-    sync::{self, GpuFuture, fence::Fence},
+    swapchain::{PresentFuture, Swapchain, SwapchainPresentInfo},
+    sync::{
+        self, GpuFuture,
+        fence::Fence,
+        future::{FenceSignalFuture, JoinFuture, NowFuture},
+    },
 };
 
-use crate::error::CrateResult;
+use crate::error::{CrateError, CrateResult};
 
 #[derive(Debug, Clone)]
 pub struct VkDevice {
@@ -144,34 +149,6 @@ impl VkDevice {
         Ok(())
     }
 
-    /// Sends one command buffer to the GPU and presents a swapchain image afterwards.
-    /// Joins on the supplied future, waiting for it to complete before sending to the device.
-    pub fn send_to_device_get_swapchain_image(
-        &self,
-        cmd_buffer: Arc<PrimaryAutoCommandBuffer>,
-        swapchain: Arc<Swapchain>,
-        image_index: u32,
-        swapchain_future: SwapchainAcquireFuture,
-    ) -> CrateResult<()> {
-        // SAFETY: Already confirmed at initialisation to have at least one element.
-        let queue = self.queues.first().unwrap();
-
-        let future = sync::now(self.device.clone())
-            .join(swapchain_future)
-            .then_execute(queue.clone(), cmd_buffer)?;
-
-        let future = future
-            .then_swapchain_present(
-                queue.clone(),
-                SwapchainPresentInfo::swapchain_image_index(swapchain, image_index),
-            )
-            .then_signal_fence_and_flush()?;
-
-        future.wait(None)?;
-
-        Ok(())
-    }
-
     pub fn descriptor_set(
         &self,
         layout: Arc<DescriptorSetLayout>,
@@ -225,5 +202,123 @@ impl VkDevice {
 
     pub fn device(&self) -> Arc<Device> {
         self.device.clone()
+    }
+
+    /// Synchronise with the physical device, returning the created future.
+    /// Also performs general cleanup to free unused resources.
+    pub fn sync_with_device(self: &Arc<Self>) -> DeviceFuture<NowFuture> {
+        let mut future = sync::now(self.device());
+
+        future.cleanup_finished();
+
+        DeviceFuture {
+            device: self.clone(),
+            future,
+        }
+    }
+
+    /// Create a device future with the given future.
+    pub fn with_future<Fut>(self: &Arc<Self>, future: Fut) -> DeviceFuture<Fut>
+    where
+        Fut: GpuFuture,
+    {
+        DeviceFuture {
+            device: self.clone(),
+            future,
+        }
+    }
+}
+
+/// Wrapper around a `GpuFuture`.
+pub struct DeviceFuture<Fut> {
+    device: Arc<VkDevice>,
+    future: Fut,
+}
+
+impl<Fut> DeviceFuture<Fut> {
+    pub fn unwrap_future(self) -> Fut {
+        self.future
+    }
+}
+
+impl<Fut> DeviceFuture<Fut>
+where
+    Fut: GpuFuture,
+{
+    /// Join another future to this one. Future execution will continue after both futures have completed.
+    pub fn join<F>(self, next_future: F) -> DeviceFuture<JoinFuture<Fut, F>>
+    where
+        F: GpuFuture,
+    {
+        DeviceFuture {
+            device: self.device,
+            future: self.future.join(next_future),
+        }
+    }
+
+    /// Execute the supplied command buffer on the first device queue.
+    pub fn execute(
+        self,
+        cmd_buffer: Arc<PrimaryAutoCommandBuffer>,
+    ) -> CrateResult<DeviceFuture<CommandBufferExecFuture<Fut>>> {
+        // SAFETY: Already confirmed at initialisation to have at least one element.
+        let queue = self.device.queues.first().unwrap().clone();
+
+        Ok(DeviceFuture {
+            device: self.device,
+            future: self.future.then_execute(queue, cmd_buffer)?,
+        })
+    }
+
+    /// Present a swapchain image after execution completes.
+    /// This must be called on or after a command buffer future is created (by calling `execute at least once`).
+    pub fn present_swapchain(
+        self,
+        swapchain: Arc<Swapchain>,
+        image_index: u32,
+    ) -> CrateResult<DeviceFuture<PresentFuture<Fut>>> {
+        let queue = self
+            .future
+            .queue()
+            .ok_or_else(|| CrateError::missing_data("Current future has no attached queue."))?;
+
+        let future = self.future.then_swapchain_present(
+            queue,
+            SwapchainPresentInfo::swapchain_image_index(swapchain, image_index),
+        );
+
+        Ok(DeviceFuture {
+            device: self.device,
+            future,
+        })
+    }
+
+    /// Triggers signalling of a fence, followed by a flush.
+    pub fn signal_fence_and_flush(self) -> CrateResult<DeviceFuture<FenceSignalFuture<Fut>>> {
+        Ok(DeviceFuture {
+            device: self.device,
+            future: self.future.then_signal_fence_and_flush()?,
+        })
+    }
+
+    pub fn boxed(self) -> DeviceFuture<Box<dyn GpuFuture>>
+    where
+        Fut: 'static,
+    {
+        DeviceFuture {
+            device: self.device,
+            future: self.future.boxed(),
+        }
+    }
+}
+
+impl<Fut> DeviceFuture<FenceSignalFuture<Fut>>
+where
+    Fut: GpuFuture,
+{
+    /// Consumes this future, waiting without timeout for it to complete.
+    pub fn wait(self) -> CrateResult<()> {
+        self.future.wait(None)?;
+        Ok(())
     }
 }
